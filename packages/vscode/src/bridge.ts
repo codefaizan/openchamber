@@ -105,6 +105,7 @@ export async function handleBridgeMessage(message: BridgeRequest, ctx?: BridgeCo
         clientReloadDelayMs: CLIENT_RELOAD_DELAY_MS,
       },
     );
+    console.log('[Bridge] config handler result:', configResponse?.type);
     if (configResponse) {
       return configResponse;
     }

@@ -30,6 +30,7 @@ interface OpenChamberDefaults {
     gitmojiEnabled?: boolean;
     zenModel?: string;
     messageStreamTransport?: 'auto' | 'ws' | 'sse';
+    vscodeEditPreviewMode?: 'off' | 'inline' | 'diff-editor';
 }
 
 const fetchOpenChamberDefaults = async (): Promise<OpenChamberDefaults> => {
@@ -50,6 +51,10 @@ const fetchOpenChamberDefaults = async (): Promise<OpenChamberDefaults> => {
                         data?.messageStreamTransport === 'ws' || data?.messageStreamTransport === 'sse' || data?.messageStreamTransport === 'auto'
                             ? data.messageStreamTransport
                             : undefined;
+                    const vscodeEditPreviewMode =
+                        (data?.vscodeEditPreviewMode === 'off' || data?.vscodeEditPreviewMode === 'inline' || data?.vscodeEditPreviewMode === 'diff-editor')
+                            ? data.vscodeEditPreviewMode
+                            : undefined;
 
                     return {
                         defaultModel: defaultModel.length > 0 ? defaultModel : undefined,
@@ -59,6 +64,7 @@ const fetchOpenChamberDefaults = async (): Promise<OpenChamberDefaults> => {
                         gitmojiEnabled,
                         zenModel: zenModel.length > 0 ? zenModel : undefined,
                         messageStreamTransport,
+                        vscodeEditPreviewMode,
                     };
                 }
             } catch {
@@ -84,6 +90,10 @@ const fetchOpenChamberDefaults = async (): Promise<OpenChamberDefaults> => {
             data?.messageStreamTransport === 'ws' || data?.messageStreamTransport === 'sse' || data?.messageStreamTransport === 'auto'
                 ? data.messageStreamTransport
                 : undefined;
+        const vscodeEditPreviewMode =
+            (data?.vscodeEditPreviewMode === 'off' || data?.vscodeEditPreviewMode === 'inline' || data?.vscodeEditPreviewMode === 'diff-editor')
+                ? data.vscodeEditPreviewMode
+                : undefined;
 
         return {
             defaultModel: defaultModel.length > 0 ? defaultModel : undefined,
@@ -93,6 +103,7 @@ const fetchOpenChamberDefaults = async (): Promise<OpenChamberDefaults> => {
             gitmojiEnabled,
             zenModel: zenModel.length > 0 ? zenModel : undefined,
             messageStreamTransport,
+            vscodeEditPreviewMode,
         };
     } catch {
         return {};
@@ -478,6 +489,7 @@ interface ConfigStore {
     settingsGitmojiEnabled: boolean;
     settingsZenModel: string | undefined;
     settingsMessageStreamTransport: 'auto' | 'ws' | 'sse';
+    settingsVSCodeEditPreviewMode: 'off' | 'inline' | 'diff-editor';
     // Voice provider preference ('browser', 'openai', 'openai-compatible', or 'say' for macOS)
     voiceProvider: 'browser' | 'openai' | 'openai-compatible' | 'say';
     setVoiceProvider: (provider: 'browser' | 'openai' | 'openai-compatible' | 'say') => void;
@@ -547,6 +559,7 @@ interface ConfigStore {
     setSettingsGitmojiEnabled: (enabled: boolean) => void;
     setSettingsZenModel: (model: string | undefined) => void;
     setSettingsMessageStreamTransport: (transport: 'auto' | 'ws' | 'sse') => void;
+    setSettingsVSCodeEditPreviewMode: (mode: 'off' | 'inline' | 'diff-editor') => void;
     getResolvedGitGenerationModel: () => { providerId: string; modelId: string } | null;
     saveAgentModelSelection: (agentName: string, providerId: string, modelId: string) => void;
     getAgentModelSelection: (agentName: string) => { providerId: string; modelId: string } | null;
@@ -597,6 +610,7 @@ export const useConfigStore = create<ConfigStore>()(
                 settingsGitmojiEnabled: false,
                 settingsZenModel: undefined,
                 settingsMessageStreamTransport: 'auto',
+                settingsVSCodeEditPreviewMode: 'diff-editor',
                 // Voice provider preference - load from localStorage or default to 'browser'
                 voiceProvider: (() => {
                     if (typeof window !== 'undefined') {
@@ -1271,6 +1285,7 @@ export const useConfigStore = create<ConfigStore>()(
                                     settingsGitmojiEnabled: openChamberDefaults.gitmojiEnabled ?? false,
                                     settingsZenModel: resolvedZenModel,
                                     settingsMessageStreamTransport: openChamberDefaults.messageStreamTransport ?? state.settingsMessageStreamTransport ?? 'auto',
+                                    settingsVSCodeEditPreviewMode: openChamberDefaults.vscodeEditPreviewMode ?? state.settingsVSCodeEditPreviewMode ?? 'diff-editor',
                                     directoryScoped: {
                                         ...state.directoryScoped,
                                         [directoryKey]: nextSnapshot,
@@ -1706,6 +1721,10 @@ export const useConfigStore = create<ConfigStore>()(
                     set({ settingsMessageStreamTransport: transport });
                 },
 
+                setSettingsVSCodeEditPreviewMode: (mode: 'off' | 'inline' | 'diff-editor') => {
+                    set({ settingsVSCodeEditPreviewMode: mode });
+                },
+
                 getResolvedGitGenerationModel: () => {
                     const state = get();
                     return resolveGitGenerationModelSelection({
@@ -2003,6 +2022,7 @@ export const useConfigStore = create<ConfigStore>()(
                     settingsGitmojiEnabled: state.settingsGitmojiEnabled,
                     settingsZenModel: state.settingsZenModel,
                     settingsMessageStreamTransport: state.settingsMessageStreamTransport,
+                    settingsVSCodeEditPreviewMode: state.settingsVSCodeEditPreviewMode,
                     speechRate: state.speechRate,
                     speechPitch: state.speechPitch,
                     speechVolume: state.speechVolume,

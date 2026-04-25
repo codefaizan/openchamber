@@ -127,6 +127,7 @@ export type DesktopSettings = {
   weekStartPreference?: 'auto' | 'sunday' | 'monday';
   chatRenderMode?: 'sorted' | 'live';
   messageStreamTransport?: 'auto' | 'ws' | 'sse';
+  vscodeEditPreviewMode?: 'off' | 'inline' | 'diff-editor';
   activityRenderMode?: 'collapsed' | 'summary';
   mermaidRenderingMode?: 'svg' | 'ascii';
   userMessageRenderingMode?: 'markdown' | 'plain';

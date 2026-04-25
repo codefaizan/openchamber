@@ -608,6 +608,12 @@ export async function activate(context: vscode.ExtensionContext) {
         agentManagerProvider?.updateTheme(vscode.window.activeColorTheme.kind);
         sessionEditorProvider?.updateTheme(vscode.window.activeColorTheme.kind);
       }
+
+      if (event.affectsConfiguration('openchamber.vscode.editPreviewMode')) {
+        void vscode.commands.executeCommand('openchamber.internal.settingsSynced', {
+          vscodeEditPreviewMode: vscode.workspace.getConfiguration('openchamber').get<'off' | 'inline' | 'diff-editor'>('vscode.editPreviewMode', 'diff-editor'),
+        });
+      }
     })
   );
 

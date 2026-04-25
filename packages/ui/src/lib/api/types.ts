@@ -570,6 +570,7 @@ export interface SettingsPayload {
   showExpandedEditTools?: boolean;
   chatRenderMode?: 'sorted' | 'live';
   messageStreamTransport?: 'auto' | 'ws' | 'sse';
+  vscodeEditPreviewMode?: 'off' | 'inline' | 'diff-editor';
   activityRenderMode?: 'collapsed' | 'summary';
   mermaidRenderingMode?: 'svg' | 'ascii';
   fontSize?: number;
@@ -651,6 +652,12 @@ export interface EditorAPI {
     modified: string,
     label?: string,
     options?: { line?: number; patch?: string },
+  ): Promise<void>;
+  openDiffPreview(
+    filePath: string,
+    patch: string,
+    label?: string,
+    options?: { line?: number },
   ): Promise<void>;
 }
 

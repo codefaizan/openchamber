@@ -1213,8 +1213,14 @@ onCommand('showSettings', () => {
 });
 
 // Listen for settings sync command from extension (broadcast to all VS Code webviews)
-onCommand('settingsSynced', () => {
+onCommand('settingsSynced', (payload) => {
   import('@openchamber/ui/lib/persistence').then(({ syncDesktopSettings }) => {
+    const settings = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
+    if (settings && (settings.vscodeEditPreviewMode === 'off' || settings.vscodeEditPreviewMode === 'inline' || settings.vscodeEditPreviewMode === 'diff-editor')) {
+      import('@/stores/useConfigStore').then(({ useConfigStore }) => {
+        useConfigStore.getState().setSettingsVSCodeEditPreviewMode(settings.vscodeEditPreviewMode as 'off' | 'inline' | 'diff-editor');
+      });
+    }
     void syncDesktopSettings();
   });
 });

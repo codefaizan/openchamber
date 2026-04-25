@@ -228,6 +228,7 @@ export const readSettings = (ctx?: BridgeContext): Record<string, unknown> => {
       typeof restStored.opencodeBinary === 'string'
         ? String(restStored.opencodeBinary).trim()
         : (sharedOpencodeBinary || undefined),
+    vscodeEditPreviewMode: vscode.workspace.getConfiguration('openchamber').get<'off' | 'inline' | 'diff-editor'>('vscode.editPreviewMode', 'diff-editor'),
   };
 };
 

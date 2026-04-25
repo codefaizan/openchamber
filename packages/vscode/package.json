@@ -214,6 +214,12 @@
           "type": "string",
           "default": "",
           "description": "Optional absolute path to the opencode CLI binary. Useful if PATH lookup fails. Requires window reload or API restart to apply."
+        },
+        "openchamber.vscode.editPreviewMode": {
+          "type": "string",
+          "enum": ["off", "inline", "diff-editor"],
+          "default": "diff-editor",
+          "description": "How to preview file edit permissions in VS Code. 'diff-editor' opens native diff view before approval. 'inline' shows diff in permission card. 'off' shows permission card only."
         }
       }
     }

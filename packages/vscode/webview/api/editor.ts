@@ -15,4 +15,12 @@ export const createVSCodeEditorAPI = (): EditorAPI => ({
       patch: options?.patch,
     });
   },
+  openDiffPreview: async (filePath: string, patch: string, label?: string, options?: { line?: number }) => {
+    await sendBridgeMessage('editor:openDiffPreview', {
+      filePath,
+      patch,
+      label,
+      line: options?.line,
+    });
+  },
 });

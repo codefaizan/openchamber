@@ -116,7 +116,7 @@ const ensureVirtualDiffProviderRegistered = (ctx?: BridgeContext): void => {
   }
 };
 
-const createVirtualOriginalDiffUri = (modifiedPath: string, content: string): vscode.Uri => {
+const createVirtualOriginalDiffUri = (modifiedPath: string, content: string, label: string = 'original'): vscode.Uri => {
   const key = `${Date.now()}-${++virtualDiffCounter}`;
   virtualDiffContents.set(key, content);
 
@@ -129,7 +129,7 @@ const createVirtualOriginalDiffUri = (modifiedPath: string, content: string): vs
 
   return vscode.Uri.from({
     scheme: VIRTUAL_DIFF_SCHEME,
-    path: `/${path.basename(modifiedPath) || 'original'}`,
+    path: `/${path.basename(modifiedPath) || label}`,
     query: `key=${encodeURIComponent(key)}`,
   });
 };
@@ -204,6 +204,26 @@ const reconstructOriginalContentFromPatch = (modifiedContent: string, patch: str
   return lines.join('\n');
 };
 
+const applyPatchToContent = (originalContent: string, patch: string): string | null => {
+  const hunks = parseUnifiedDiffHunks(patch);
+  if (hunks.length === 0) {
+    return null;
+  }
+
+  const lines = originalContent.split('\n');
+  for (let index = hunks.length - 1; index >= 0; index -= 1) {
+    const hunk = hunks[index];
+    if (!hunk) {
+      continue;
+    }
+    const startIndex = Math.max(0, hunk.newStart - 1);
+    const replaceCount = hunk.oldLines.length;
+    lines.splice(startIndex, replaceCount, ...hunk.newLines);
+  }
+
+  return lines.join('\n');
+};
+
 const fetchFreeZenModels = async (): Promise<Array<{ id: string; owned_by?: string }>> => {
   const now = Date.now();
   if (cachedZenModels && now - cachedZenModels.at < ZEN_MODELS_CACHE_TTL_MS) {
@@ -245,6 +265,7 @@ export async function handleSystemBridgeMessage(
   deps: SystemRuntimeDeps,
 ): Promise<BridgeResponse | null> {
   const { id, type, payload } = message;
+  console.log('[SystemBridge] handling:', type);
 
   switch (type) {
     case 'api:opencode/directory': {
@@ -393,6 +414,52 @@ export async function handleSystemBridgeMessage(
           await new Promise((resolve) => setTimeout(resolve, 0));
           const targetEditor = vscode.window.visibleTextEditors.find(
             (editor) => editor.document.uri.toString() === modifiedUri.toString(),
+          );
+          if (targetEditor) {
+            const target = new vscode.Position(targetLine, 0);
+            targetEditor.selection = new vscode.Selection(target, target);
+            targetEditor.revealRange(new vscode.Range(target, target), vscode.TextEditorRevealType.InCenter);
+          }
+        }
+
+        return { id, type, success: true };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return { id, type, success: false, error: errorMessage };
+      }
+    }
+
+    case 'editor:openDiffPreview': {
+      const { filePath, patch, label, line } = payload as {
+        filePath: string;
+        patch: string;
+        label?: string;
+        line?: number;
+      };
+      console.log('[Extension] editor:openDiffPreview received:', { filePath, label, line, patchLength: patch?.length });
+      try {
+        const currentUri = vscode.Uri.file(filePath);
+        const currentDoc = await vscode.workspace.openTextDocument(currentUri);
+        const currentContent = currentDoc.getText();
+
+        const proposedContent = applyPatchToContent(currentContent, patch);
+        if (typeof proposedContent !== 'string') {
+          console.log('[Extension] applyPatchToContent failed');
+          return { id, type, success: false, error: 'Failed to apply patch to file content' };
+        }
+
+        ensureVirtualDiffProviderRegistered(ctx);
+        const proposedUri = createVirtualOriginalDiffUri(filePath, proposedContent, 'proposed');
+
+        const title = label || `${path.basename(filePath)} (proposed changes)`;
+
+        await vscode.commands.executeCommand('vscode.diff', currentUri, proposedUri, title);
+
+        if (typeof line === 'number' && Number.isFinite(line)) {
+          const targetLine = Math.max(0, Math.trunc(line) - 1);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          const targetEditor = vscode.window.visibleTextEditors.find(
+            (editor) => editor.document.uri.toString() === proposedUri.toString(),
           );
           if (targetEditor) {
             const target = new vscode.Position(targetLine, 0);

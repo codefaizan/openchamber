@@ -419,6 +419,11 @@ const applyDesktopUiPreferences = (settings: DesktopSettings) => {
       configStore.setSettingsMessageStreamTransport(settings.messageStreamTransport);
     }
   }
+  if (settings.vscodeEditPreviewMode === 'off' || settings.vscodeEditPreviewMode === 'inline' || settings.vscodeEditPreviewMode === 'diff-editor') {
+    if (configStore && settings.vscodeEditPreviewMode !== configStore.settingsVSCodeEditPreviewMode) {
+      configStore.setSettingsVSCodeEditPreviewMode(settings.vscodeEditPreviewMode);
+    }
+  }
   if (typeof settings.stickyUserHeader === 'boolean' && settings.stickyUserHeader !== store.stickyUserHeader) {
     store.setStickyUserHeader(settings.stickyUserHeader);
   }
