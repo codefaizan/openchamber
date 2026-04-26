@@ -1057,10 +1057,6 @@ export const GitView: React.FC = () => {
   }, [currentDirectory, selectedPaths, settingsGitmojiEnabled, gitmojiEmojis, scrollActionPanelToBottom]);
 
   const formatBlockingReason = (reason: ReturnType<typeof getMutationBlockingReasons>[number]): string => {
-    if (reason.reason === 'dirty') {
-      const count = typeof reason.dirtyFiles === 'number' ? reason.dirtyFiles : null;
-      return count != null ? `${count} uncommitted file${count === 1 ? '' : 's'}` : 'uncommitted changes';
-    }
     if (reason.reason === 'attention') {
       return `${reason.attentionReason} in progress`;
     }
@@ -1073,7 +1069,7 @@ export const GitView: React.FC = () => {
   const handleCreateBranch = async (branchName: string, remote?: GitRemote) => {
     if (!currentDirectory || !status) return;
 
-    const blockingReasons = getMutationBlockingReasons(worktreeAttachment ?? null, status);
+    const blockingReasons = getMutationBlockingReasons(worktreeAttachment);
     if (blockingReasons.length > 0) {
       toast.error(`Cannot create branch: ${formatBlockingReason(blockingReasons[0])}`);
       return;
@@ -1127,7 +1123,7 @@ export const GitView: React.FC = () => {
   const handleRenameBranch = async (oldName: string, newName: string) => {
     if (!currentDirectory) return;
 
-    const blockingReasons = getMutationBlockingReasons(worktreeAttachment ?? null, status);
+    const blockingReasons = getMutationBlockingReasons(worktreeAttachment);
     if (blockingReasons.length > 0) {
       toast.error(`Cannot rename branch: ${formatBlockingReason(blockingReasons[0])}`);
       return;
@@ -1149,7 +1145,7 @@ export const GitView: React.FC = () => {
     if (!currentDirectory) return;
 
     // Block mutation if worktree is in an attention-required state
-    const blockingReasons = getMutationBlockingReasons(worktreeAttachment ?? null, status);
+    const blockingReasons = getMutationBlockingReasons(worktreeAttachment);
     if (blockingReasons.length > 0) {
       toast.error(`Cannot checkout: ${formatBlockingReason(blockingReasons[0])}`);
       return;
@@ -1653,10 +1649,12 @@ export const GitView: React.FC = () => {
 
       const currentBranch = status?.current;
 
+      const knownRemoteNames = new Set(effectiveRemotes.map((r) => r.name));
+
       try {
-        // If it's a remote branch (contains '/'), fetch latest first
+        // If it's a remote-tracking branch (prefix matches a known remote), fetch latest first
         const slashIndex = branch.indexOf('/');
-        if (slashIndex > 0) {
+        if (slashIndex > 0 && knownRemoteNames.has(branch.substring(0, slashIndex))) {
           const remote = branch.substring(0, slashIndex);
           const remoteBranch = branch.substring(slashIndex + 1);
           addOperationLog(`Fetching ${remote}/${remoteBranch}...`, 'running');
@@ -1694,7 +1692,7 @@ export const GitView: React.FC = () => {
       }
       // Note: branchOperation is cleared when dialog closes via handleOperationComplete
     },
-    [currentDirectory, git, status, refreshStatusAndBranches, refreshLog, isUncommittedChangesError, persistConflictState, clearConflictState, addOperationLog, updateLastLog, resetOperationLogs]
+    [currentDirectory, git, status, effectiveRemotes, refreshStatusAndBranches, refreshLog, isUncommittedChangesError, persistConflictState, clearConflictState, addOperationLog, updateLastLog, resetOperationLogs]
   );
 
   const handleRebase = React.useCallback(
@@ -1705,10 +1703,12 @@ export const GitView: React.FC = () => {
 
       const currentBranch = status?.current;
 
+      const knownRemoteNames = new Set(effectiveRemotes.map((r) => r.name));
+
       try {
-        // If it's a remote branch (contains '/'), fetch latest first
+        // If it's a remote-tracking branch (prefix matches a known remote), fetch latest first
         const slashIndex = branch.indexOf('/');
-        if (slashIndex > 0) {
+        if (slashIndex > 0 && knownRemoteNames.has(branch.substring(0, slashIndex))) {
           const remote = branch.substring(0, slashIndex);
           const remoteBranch = branch.substring(slashIndex + 1);
           addOperationLog(`Fetching ${remote}/${remoteBranch}...`, 'running');
@@ -1746,7 +1746,7 @@ export const GitView: React.FC = () => {
       }
       // Note: branchOperation is cleared when dialog closes via handleOperationComplete
     },
-    [currentDirectory, git, status, refreshStatusAndBranches, refreshLog, isUncommittedChangesError, persistConflictState, clearConflictState, addOperationLog, updateLastLog, resetOperationLogs]
+    [currentDirectory, git, status, effectiveRemotes, refreshStatusAndBranches, refreshLog, isUncommittedChangesError, persistConflictState, clearConflictState, addOperationLog, updateLastLog, resetOperationLogs]
   );
 
   const handleAbortConflict = React.useCallback(async () => {
@@ -1996,7 +1996,7 @@ export const GitView: React.FC = () => {
   }
 
   return (
-    <div className={cn('flex h-full flex-col overflow-hidden', 'bg-sidebar')} data-keyboard-avoid="true">
+    <div className={cn('flex h-full flex-col overflow-hidden', 'bg-sidebar')}>
       <GitHeader
         status={status}
         localBranches={localBranches}

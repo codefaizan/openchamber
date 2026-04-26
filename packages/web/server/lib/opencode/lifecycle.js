@@ -22,6 +22,8 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
     setupProxy,
     ensureOpenCodeApiPrefix,
     clearResolvedOpenCodeBinary,
+    buildAugmentedPath,
+    buildManagedOpenCodePath,
   } = deps;
 
   const killProcessOnPort = (port) => {
@@ -319,12 +321,17 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
     }
 
     try {
-      const response = await fetch(buildOpenCodeUrl('/session', ''), {
+      const response = await fetch(buildOpenCodeUrl('/global/health', ''), {
         method: 'GET',
-        headers: getOpenCodeAuthHeaders(),
-        signal: AbortSignal.timeout(2000),
+        headers: {
+          Accept: 'application/json',
+          ...getOpenCodeAuthHeaders(),
+        },
+        signal: AbortSignal.timeout(5000),
       });
-      return response.ok;
+      if (!response.ok) return false;
+      const body = await response.json().catch(() => null);
+      return body?.healthy === true;
     } catch {
       return false;
     }
@@ -384,6 +391,11 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
     await applyOpencodeBinaryFromSettings();
     ensureOpencodeCliEnv();
     const openCodePassword = await ensureLocalOpenCodeServerPassword({ rotateManaged: true });
+    const envPath = typeof buildManagedOpenCodePath === 'function'
+      ? buildManagedOpenCodePath()
+      : typeof buildAugmentedPath === 'function'
+        ? buildAugmentedPath()
+      : process.env.PATH;
 
     try {
       const serverInstance = await createManagedOpenCodeServerProcess({
@@ -393,6 +405,7 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
         cwd: state.openCodeWorkingDirectory,
         env: {
           ...process.env,
+          PATH: envPath,
           OPENCODE_SERVER_PASSWORD: openCodePassword,
         },
       });

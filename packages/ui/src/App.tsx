@@ -18,6 +18,7 @@ import { useRouter } from '@/hooks/useRouter';
 import { usePushVisibilityBeacon } from '@/hooks/usePushVisibilityBeacon';
 import { usePwaManifestSync } from '@/hooks/usePwaManifestSync';
 import { usePwaInstallPrompt } from '@/hooks/usePwaInstallPrompt';
+import { useWindowControlsOverlayLayout } from '@/hooks/useWindowControlsOverlayLayout';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { hasModifier } from '@/lib/utils';
@@ -31,7 +32,6 @@ import {
   type BootInjectionStatus,
   type DesktopBootView,
 } from '@/lib/desktopBoot';
-import { OnboardingScreen } from '@/components/onboarding/OnboardingScreen';
 import type { RecoveryVariant } from '@/components/onboarding/DesktopConnectionRecovery';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
@@ -53,6 +53,14 @@ import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { QuickOpenDialog } from '@/components/ui/QuickOpenDialog';
+import { McpOAuthCallbackPage } from '@/components/sections/mcp/McpOAuthCallbackPage';
+import { MCP_OAUTH_CALLBACK_PATH } from '@/components/sections/mcp/mcpOAuth';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+
+// Lazy-loaded heavy views — loaded on demand to reduce initial bundle size.
+const OnboardingScreen = lazyWithChunkRecovery(() =>
+  import('@/components/onboarding/OnboardingScreen').then((m) => ({ default: m.OnboardingScreen })),
+);
 
 const AboutDialogWrapper: React.FC = () => {
   const isAboutDialogOpen = useUIStore((s) => s.isAboutDialogOpen);
@@ -105,6 +113,14 @@ const readEmbeddedSessionChatConfig = (): EmbeddedSessionChatConfig | null => {
   };
 };
 
+const isMcpOAuthCallbackPath = (): boolean => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.location.pathname === MCP_OAUTH_CALLBACK_PATH;
+};
+
 const EmbeddedSessionSelectionGate: React.FC<{
   embeddedSessionChat: EmbeddedSessionChatConfig | null;
   isVSCodeRuntime: boolean;
@@ -153,6 +169,7 @@ function SyncAppEffects({ embeddedBackgroundWorkEnabled }: {
   embeddedBackgroundWorkEnabled: boolean;
 }) {
   usePwaManifestSync();
+  useWindowControlsOverlayLayout();
   useSessionAutoCleanup(embeddedBackgroundWorkEnabled);
   useQueuedMessageAutoSend(embeddedBackgroundWorkEnabled);
   useKeyboardShortcuts();
@@ -190,8 +207,10 @@ function App({ apis }: AppProps) {
       : null;
   });
   const appReadyDispatchedRef = React.useRef(false);
+  const initializationInFlightRef = React.useRef(false);
   const embeddedSessionChat = React.useMemo<EmbeddedSessionChatConfig | null>(() => readEmbeddedSessionChatConfig(), []);
   const embeddedBackgroundWorkEnabled = !embeddedSessionChat || isEmbeddedVisible;
+  const isMcpOAuthCallback = React.useMemo(() => isMcpOAuthCallbackPath(), []);
 
   React.useEffect(() => {
     setStreamPerfEnabled(showMemoryDebug);
@@ -328,11 +347,54 @@ function App({ apis }: AppProps) {
       if (isVSCodeRuntime) {
         return;
       }
-      await initializeApp();
+      if (initializationInFlightRef.current) {
+        return;
+      }
+      initializationInFlightRef.current = true;
+      try {
+        await initializeApp();
+      } finally {
+        initializationInFlightRef.current = false;
+      }
     };
 
     init();
   }, [initializeApp, isVSCodeRuntime]);
+
+  React.useEffect(() => {
+    if (isVSCodeRuntime || isInitialized) return;
+
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const retryInitialization = async () => {
+      if (!active) return;
+      const state = useConfigStore.getState();
+      if (state.isInitialized) return;
+      if (initializationInFlightRef.current) {
+        retryTimer = setTimeout(retryInitialization, 1000);
+        return;
+      }
+
+      initializationInFlightRef.current = true;
+      try {
+        await state.initializeApp();
+      } finally {
+        initializationInFlightRef.current = false;
+      }
+
+      const next = useConfigStore.getState();
+      if (!active || next.isInitialized) return;
+      retryTimer = setTimeout(retryInitialization, 1000);
+    };
+
+    retryTimer = setTimeout(retryInitialization, 1000);
+
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [isInitialized, isVSCodeRuntime]);
 
   // Startup recovery: poll until providers AND agents are loaded.
   // loadProviders/loadAgents resolve normally even on failure (errors swallowed),
@@ -634,13 +696,15 @@ function App({ apis }: AppProps) {
       return (
         <ErrorBoundary>
           <div className="h-full text-foreground bg-transparent">
-            <OnboardingScreen
-              mode="first-launch"
-              onCliAvailable={handleDesktopBootDismiss}
-              onChooseRemote={() => {
-                // Switch to remote tab - handled internally by OnboardingScreen
-              }}
-            />
+            <React.Suspense fallback={<div className="h-full" />}>
+              <OnboardingScreen
+                mode="first-launch"
+                onCliAvailable={handleDesktopBootDismiss}
+                onChooseRemote={() => {
+                  // Switch to remote tab - handled internally by OnboardingScreen
+                }}
+              />
+            </React.Suspense>
           </div>
         </ErrorBoundary>
       );
@@ -653,13 +717,15 @@ function App({ apis }: AppProps) {
     return (
       <ErrorBoundary>
         <div className="h-full text-foreground bg-transparent">
-          <OnboardingScreen
-            mode="recovery"
-            recoveryVariant={recoveryVariant}
-            recoveryHostUrl={hostUrl}
-            recoveryHostLabel={undefined}
-            onCliAvailable={handleDesktopBootDismiss}
-          />
+          <React.Suspense fallback={<div className="h-full" />}>
+            <OnboardingScreen
+              mode="recovery"
+              recoveryVariant={recoveryVariant}
+              recoveryHostUrl={hostUrl}
+              recoveryHostLabel={undefined}
+              onCliAvailable={handleDesktopBootDismiss}
+            />
+          </React.Suspense>
         </div>
       </ErrorBoundary>
     );
@@ -680,6 +746,14 @@ function App({ apis }: AppProps) {
             </TooltipProvider>
           </RuntimeAPIProvider>
         </SyncProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  if (isMcpOAuthCallback) {
+    return (
+      <ErrorBoundary>
+        <McpOAuthCallbackPage />
       </ErrorBoundary>
     );
   }
@@ -728,6 +802,11 @@ function App({ apis }: AppProps) {
     );
   }
 
+  // Always mount the full provider tree to avoid remounts when isInitialized
+  // flips from false → true. FireworksProvider and VoiceProvider are lightweight
+  // shells; their heavy children are only activated when actually needed.
+  const isBootShell = !isInitialized && !isDesktopRuntime;
+
   return (
     <ErrorBoundary>
       <SyncProvider sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''}>
@@ -739,11 +818,15 @@ function App({ apis }: AppProps) {
                   <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
                   <MainLayout />
                   <Toaster />
-                  <ConfigUpdateOverlay />
-                  <QuickOpenDialog />
-                  <AboutDialogWrapper />
-                  {showMemoryDebug && (
-                    <MemoryDebugPanel onClose={() => setShowMemoryDebug(false)} />
+                  {!isBootShell && (
+                    <>
+                      <ConfigUpdateOverlay />
+                      <QuickOpenDialog />
+                      <AboutDialogWrapper />
+                      {showMemoryDebug && (
+                        <MemoryDebugPanel onClose={() => setShowMemoryDebug(false)} />
+                      )}
+                    </>
                   )}
                 </div>
               </TooltipProvider>

@@ -71,6 +71,7 @@ import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useUIStore } from '@/stores/useUIStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useGitStatus } from '@/stores/useGitStore';
+import { useConfigStore } from '@/stores/useConfigStore';
 import { buildCodeMirrorCommentWidgets, normalizeLineRange, useInlineCommentController } from '@/components/comments';
 import { opencodeClient } from '@/lib/opencode/client';
 import { useDirectoryShowHidden } from '@/lib/directoryShowHidden';
@@ -90,6 +91,12 @@ type FileNode = {
   type: 'file' | 'directory';
   extension?: string;
   relativePath?: string;
+};
+
+type FileStatSnapshot = {
+  path: string;
+  size: number;
+  mtimeMs?: number;
 };
 
 type SelectedLineRange = {
@@ -623,6 +630,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const [draftContent, setDraftContent] = React.useState('');
   const [isSaving, setIsSaving] = React.useState(false);
   const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLoadedFileStatRef = React.useRef<FileStatSnapshot | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = React.useState<'idle' | 'saved'>('idle');
 
   const [confirmDiscardOpen, setConfirmDiscardOpen] = React.useState(false);
@@ -722,6 +730,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const pendingFileFocusPath = useUIStore((state) => state.pendingFileFocusPath);
   const setPendingFileFocusPath = useUIStore((state) => state.setPendingFileFocusPath);
   const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
+  const settingsDefaultFileViewerPreview = useConfigStore((state) => state.settingsDefaultFileViewerPreview);
 
   // Global mouseup to end drag selection
   React.useEffect(() => {
@@ -1213,6 +1222,18 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     return response.text();
   }, [files]);
 
+  const readFileStat = React.useCallback(async (path: string): Promise<FileStatSnapshot | null> => {
+    if (files.statFile) {
+      const result = await files.statFile(path);
+      return {
+        path: result.path,
+        size: result.size,
+        mtimeMs: result.mtimeMs,
+      };
+    }
+    return null;
+  }, [files]);
+
   const displayedContent = React.useMemo(() => {
     return fileContent.length > MAX_VIEW_CHARS
       ? `${fileContent.slice(0, MAX_VIEW_CHARS)}\n\n… truncated …`
@@ -1240,6 +1261,14 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
           return;
         }
         setFileContent(draftContent);
+        // Refresh stat after write so polling doesn't see a stale metadata change.
+        void readFileStat(selectedFile.path)
+          .then((stat) => {
+            if (stat) {
+              lastLoadedFileStatRef.current = stat;
+            }
+          })
+          .catch(() => {});
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : 'Save failed');
@@ -1247,7 +1276,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
       .finally(() => {
         setIsSaving(false);
       });
-  }, [draftContent, files, isDirty, selectedFile]);
+  }, [draftContent, files, isDirty, readFileStat, selectedFile]);
 
   React.useEffect(() => {
     if (!isDirty) {
@@ -1371,6 +1400,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
           ? `${content.slice(0, MAX_VIEW_CHARS)}\n\n… truncated …`
           : content);
         setLoadedFilePath(node.path);
+        void readFileStat(node.path)
+          .then((stat) => {
+            if (stat) {
+              lastLoadedFileStatRef.current = stat;
+            }
+          })
+          .catch(() => {});
       })
       .catch((error) => {
         if (isDirectoryReadError(error)) {
@@ -1381,6 +1417,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
           setFileContent('');
           setDraftContent('');
           setLoadedFilePath(null);
+          lastLoadedFileStatRef.current = null;
           if (searchQuery.trim().length > 0) {
             setSearchQuery('');
           }
@@ -1404,11 +1441,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
         setFileContent('');
         setDraftContent('');
         setFileError(error instanceof Error ? error.message : 'Failed to read file');
+        lastLoadedFileStatRef.current = null;
       })
       .finally(() => {
         setFileLoading(false);
       });
-  }, [expandPaths, isMobile, loadDirectory, readFile, root, runtime.isDesktop, searchQuery, setSelectedPath]);
+  }, [expandPaths, isMobile, loadDirectory, readFile, readFileStat, root, runtime.isDesktop, searchQuery, setSelectedPath]);
 
   const ensurePathVisible = React.useCallback(async (targetPath: string, includeTarget: boolean) => {
     if (!root) {
@@ -1482,6 +1520,63 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     // Selection changes are guarded; this effect is also what restores persisted tabs on mount.
     void loadSelectedFile(selectedFile);
   }, [loadSelectedFile, loadedFilePath, selectedFile]);
+
+  // Sync isDirty to a ref so the polling interval can read the latest value
+  // without isDirty in its dependency array (avoids interval restart on every edit/save).
+  const isDirtyRef = React.useRef(isDirty);
+  isDirtyRef.current = isDirty;
+
+  // Poll open file for external changes.
+  // When a change is detected, reset loadedFilePath so the effect above
+  // triggers a single reload — no double-load.
+  React.useEffect(() => {
+    if (!selectedFile?.path || loadedFilePath !== selectedFile.path) {
+      return;
+    }
+
+    let cancelled = false;
+    const interval = window.setInterval(() => {
+      if (document.hidden) {
+        return;
+      }
+
+      void readFileStat(selectedFile.path)
+        .then((latestStat) => {
+          if (cancelled || !latestStat) {
+            return;
+          }
+
+          const previousStat = lastLoadedFileStatRef.current;
+          if (!previousStat || previousStat.path !== selectedFile.path) {
+            lastLoadedFileStatRef.current = latestStat;
+            return;
+          }
+
+          const changedByMtime = latestStat.mtimeMs !== undefined
+            && previousStat.mtimeMs !== undefined
+            && latestStat.mtimeMs !== previousStat.mtimeMs;
+          const changedBySize = latestStat.size !== previousStat.size;
+
+          if (!changedByMtime && !changedBySize) {
+            return;
+          }
+
+          if (isDirtyRef.current) {
+            return;
+          }
+
+          lastLoadedFileStatRef.current = latestStat;
+          // Reset loadedFilePath so the effect above triggers a single reload.
+          setLoadedFilePath(null);
+        })
+        .catch(() => {});
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [loadedFilePath, readFileStat, selectedFile?.path]);
 
   const discardAndContinue = React.useCallback(() => {
     const nextFile = pendingSelectFileRef.current;
@@ -1771,25 +1866,37 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     }
   }, [canEdit, textViewMode]);
 
-  React.useEffect(() => {
-    setTextViewMode('edit');
-    setHtmlViewMode('edit');
-  }, [selectedFile?.path]);
-
   const MD_VIEWER_MODE_KEY = 'openchamber:files:md-viewer-mode';
+  const HTML_VIEWER_MODE_KEY = 'openchamber:files:html-viewer-mode';
 
   React.useEffect(() => {
+    const defaultMode = settingsDefaultFileViewerPreview ? 'view' : 'edit';
+    setTextViewMode(defaultMode);
+
+    // Respect per-type localStorage preference when available,
+    // falling back to the setting-derived default when nothing is stored.
+    let mdDefault: 'preview' | 'edit' = settingsDefaultFileViewerPreview ? 'preview' : 'edit';
     try {
       const stored = localStorage.getItem(MD_VIEWER_MODE_KEY);
-      if (stored === 'preview') {
-        setMdViewMode('preview');
-      } else if (stored === 'edit') {
-        setMdViewMode('edit');
+      if (stored === 'preview' || stored === 'edit') {
+        mdDefault = stored;
       }
     } catch {
       // Ignore localStorage errors
     }
-  }, []);
+    setMdViewMode(mdDefault);
+
+    let htmlDefault: 'preview' | 'edit' = settingsDefaultFileViewerPreview ? 'preview' : 'edit';
+    try {
+      const stored = localStorage.getItem(HTML_VIEWER_MODE_KEY);
+      if (stored === 'preview' || stored === 'edit') {
+        htmlDefault = stored;
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+    setHtmlViewMode(htmlDefault);
+  }, [selectedFile?.path, settingsDefaultFileViewerPreview]);
 
   const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     setMdViewMode(mode);
@@ -1813,21 +1920,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
         setJsonViewMode('tree');
       } else if (stored === 'text') {
         setJsonViewMode('text');
-      }
-    } catch {
-      // Ignore localStorage errors
-    }
-  }, []);
-
-  const HTML_VIEWER_MODE_KEY = 'openchamber:files:html-viewer-mode';
-
-  React.useEffect(() => {
-    try {
-      const stored = localStorage.getItem(HTML_VIEWER_MODE_KEY);
-      if (stored === 'preview') {
-        setHtmlViewMode('preview');
-      } else if (stored === 'edit') {
-        setHtmlViewMode('edit');
       }
     } catch {
       // Ignore localStorage errors
@@ -2058,10 +2150,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
       return;
     }
 
-    const rootStyles = getComputedStyle(document.documentElement);
-    const keyboardInset = Number.parseFloat(rootStyles.getPropertyValue('--oc-keyboard-inset')) || 0;
-    const keyboardHomeIndicator = Number.parseFloat(rootStyles.getPropertyValue('--oc-keyboard-home-indicator')) || 0;
-    const occludedBottom = keyboardInset + keyboardHomeIndicator;
+    const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+    const occludedBottom = Math.max(0, layoutHeight - (viewport.offsetTop + viewport.height));
     if (occludedBottom <= 0) {
       return;
     }
@@ -2873,8 +2963,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
             <div
               className={cn('relative h-full', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}
               ref={editorWrapperRef}
-              data-keyboard-avoid="none"
-              style={isMobile ? { height: 'calc(100% - var(--oc-keyboard-inset, 0px))' } : undefined}
             >
               <div className={cn('h-full', shouldMaskEditorForPendingNavigation && 'invisible')}>
                 <CodeMirrorEditor

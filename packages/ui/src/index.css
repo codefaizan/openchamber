@@ -763,6 +763,26 @@ html:not(.dark) .chat-scroll {
   }
 }
 
+/* Status row: collapse optional text when narrow to keep both sides in one line. */
+@container status-row (max-width: 30rem) {
+  .status-row__active-todo {
+    display: none;
+  }
+}
+
+@container status-row (max-width: 24rem) {
+  .status-row__changed-label {
+    display: none;
+  }
+}
+
+/* Assistant message footer: collapse text labels to icons when narrow. */
+@container message-footer (max-width: 24rem) {
+  .message-footer__label {
+    display: none;
+  }
+}
+
 /* Animated tabs: collapse labels based on local container width. */
 @container animated-tabs (max-width: 23rem) {
   .animated-tabs__label {

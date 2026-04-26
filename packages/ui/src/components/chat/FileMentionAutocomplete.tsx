@@ -1,5 +1,5 @@
 import React from 'react';
-import { RiCodeLine, RiFileImageLine, RiFileLine, RiFilePdfLine, RiRefreshLine } from '@remixicon/react';
+import { RiCodeLine, RiFileImageLine, RiFileLine, RiFilePdfLine, RiFolder3Fill, RiRefreshLine } from '@remixicon/react';
 import { cn, truncatePathMiddle } from '@/lib/utils';
 import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -18,6 +18,8 @@ type AgentInfo = {
   description?: string;
   mode?: string | null;
 };
+const EMPTY_FILES: FileInfo[] = [];
+const EMPTY_AGENTS: AgentInfo[] = [];
 
 export interface FileMentionHandle {
   handleKeyDown: (key: string) => void;
@@ -70,8 +72,10 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
   const showHidden = useDirectoryShowHidden();
   const showGitignored = useFilesViewShowGitignored();
   const [files, setFiles] = React.useState<FileInfo[]>([]);
+  const [directories, setDirectories] = React.useState<FileInfo[]>([]);
   const [agents, setAgents] = React.useState<AgentInfo[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const pendingSearchRef = React.useRef(0);
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const [marqueeWidth, setMarqueeWidth] = React.useState(360);
   const [overflowMap, setOverflowMap] = React.useState<Record<number, boolean>>({});
@@ -82,8 +86,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const ignoreTabClickRef = React.useRef(false);
   const normalizedSearchQuery = (searchQuery ?? '').trim();
-  const visibleAgents = normalizedSearchQuery.length > 0 ? agents : agents.slice(0, 2);
-
+  const scopeResultsToActiveTab = showTabs === true;
   const recentFiles = React.useMemo(() => {
     if (!projectRoot || !projectTabs) {
       return [] as FileInfo[];
@@ -121,6 +124,15 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
 
     return mapped;
   }, [normalizedSearchQuery, projectRoot, projectTabs]);
+  const visibleAgents = React.useMemo(
+    () => !scopeResultsToActiveTab || activeTab === 'agents'
+      ? (normalizedSearchQuery.length > 0 ? agents : agents.slice(0, 2))
+      : EMPTY_AGENTS,
+    [activeTab, agents, normalizedSearchQuery.length, scopeResultsToActiveTab],
+  );
+  const visibleDirectories = !scopeResultsToActiveTab || activeTab === 'files' ? directories : EMPTY_FILES;
+  const visibleRecentFiles = !scopeResultsToActiveTab || activeTab === 'files' ? recentFiles : EMPTY_FILES;
+  const visibleFiles = !scopeResultsToActiveTab || activeTab === 'files' ? files : EMPTY_FILES;
 
   React.useEffect(() => {
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
@@ -143,7 +155,6 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
   React.useEffect(() => {
     if (!currentDirectory) {
       setFiles([]);
-      setLoading(false);
       return;
     }
 
@@ -155,11 +166,11 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
 
     if (!normalizedQueryLower) {
       setFiles([]);
-      setLoading(false);
       return;
     }
 
     let cancelled = false;
+    pendingSearchRef.current++;
     setLoading(true);
 
     searchFiles(currentDirectory, normalizedQueryLower, 80, {
@@ -182,14 +193,77 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
       })
       .finally(() => {
         if (!cancelled) {
-          setLoading(false);
+          pendingSearchRef.current--;
+          if (pendingSearchRef.current <= 0) {
+            pendingSearchRef.current = 0;
+            setLoading(false);
+          }
         }
       });
 
     return () => {
       cancelled = true;
+      pendingSearchRef.current = Math.max(0, pendingSearchRef.current - 1);
+      if (pendingSearchRef.current <= 0) {
+        setLoading(false);
+      }
     };
   }, [currentDirectory, debouncedQuery, recentFiles, searchFiles, showHidden, showGitignored]);
+
+  React.useEffect(() => {
+    if (!currentDirectory) {
+      setDirectories([]);
+      return;
+    }
+
+    const normalizedQuery = (debouncedQuery ?? '').trim();
+    const normalizedQueryLower = normalizedQuery
+      .replace(/^\.\//, '')
+      .replace(/^\/+/, '')
+      .toLowerCase();
+
+    if (!normalizedQueryLower) {
+      setDirectories([]);
+      return;
+    }
+
+    let cancelled = false;
+    pendingSearchRef.current++;
+    setLoading(true);
+
+    searchFiles(currentDirectory, normalizedQueryLower, 20, {
+      includeHidden: showHidden,
+      respectGitignore: !showGitignored,
+      type: 'directory',
+    })
+      .then((hits) => {
+        if (!cancelled) {
+          setDirectories(hits.slice(0, 10));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDirectories([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          pendingSearchRef.current--;
+          if (pendingSearchRef.current <= 0) {
+            pendingSearchRef.current = 0;
+            setLoading(false);
+          }
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      pendingSearchRef.current = Math.max(0, pendingSearchRef.current - 1);
+      if (pendingSearchRef.current <= 0) {
+        setLoading(false);
+      }
+    };
+  }, [currentDirectory, debouncedQuery, searchFiles, showHidden, showGitignored]);
 
   React.useEffect(() => {
     const visibleAgents = getVisibleAgents();
@@ -214,7 +288,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
     setSelectedIndex(0);
     setOverflowMap({});
     setMarqueeDurations({});
-  }, [files, recentFiles.length, visibleAgents.length]);
+  }, [visibleFiles, visibleDirectories, visibleRecentFiles.length, visibleAgents.length]);
 
   React.useEffect(() => {
     itemRefs.current[selectedIndex]?.scrollIntoView({
@@ -261,7 +335,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
       }
       window.removeEventListener('resize', updateOverflow);
     };
-  }, [files]);
+  }, [visibleFiles, visibleDirectories]);
 
   React.useEffect(() => {
     const labelNode = labelRefs.current[selectedIndex];
@@ -305,7 +379,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
         return;
       }
 
-      const total = visibleAgents.length + recentFiles.length + files.length;
+      const total = visibleAgents.length + visibleDirectories.length + visibleRecentFiles.length + visibleFiles.length;
       if (total === 0) {
         return;
       }
@@ -329,16 +403,24 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
           }
           return;
         }
-        const fileIndex = safeIndex - visibleAgents.length;
-        const selectedFile = fileIndex < recentFiles.length
-          ? recentFiles[fileIndex]
-          : files[fileIndex - recentFiles.length];
+        const dirIndex = safeIndex - visibleAgents.length;
+        if (dirIndex < visibleDirectories.length) {
+          const dir = visibleDirectories[dirIndex];
+          if (dir) {
+            handleFileSelect(dir);
+          }
+          return;
+        }
+        const fileIndex = dirIndex - visibleDirectories.length;
+        const selectedFile = fileIndex < visibleRecentFiles.length
+          ? visibleRecentFiles[fileIndex]
+          : visibleFiles[fileIndex - visibleRecentFiles.length];
         if (selectedFile) {
           handleFileSelect(selectedFile);
         }
       }
     }
-  }), [files, recentFiles, visibleAgents, selectedIndex, onClose, handleFileSelect, handleAgentPick]);
+  }), [visibleFiles, visibleDirectories, visibleRecentFiles, visibleAgents, selectedIndex, onClose, handleFileSelect, handleAgentPick]);
 
   const getFileIcon = (file: FileInfo) => {
     const ext = file.extension?.toLowerCase();
@@ -411,7 +493,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
           </div>
         ) : null}
         <ScrollableOverlay outerClassName="flex-1 min-h-0" className="px-0">
-        {loading ? (
+        {(!scopeResultsToActiveTab || activeTab === 'files') && loading ? (
           <div className="flex items-center justify-center py-4">
             <RiRefreshLine className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
@@ -444,11 +526,38 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
                 Type to search more agents
               </div>
             )}
-            {visibleAgents.length > 0 && (recentFiles.length > 0 || files.length > 0) && (
+            {visibleAgents.length > 0 && (visibleDirectories.length > 0 || visibleRecentFiles.length > 0 || visibleFiles.length > 0) && (
               <div className="my-1 border-t border-border/60" />
             )}
-            {recentFiles.map((file, index) => {
+            {visibleDirectories.map((dir, index) => {
               const rowIndex = visibleAgents.length + index;
+              const relativePath = dir.relativePath || dir.name;
+              const displayPath = truncatePathMiddle(relativePath, { maxLength: 60 });
+              const isSelected = selectedIndex === rowIndex;
+
+              return (
+                <div
+                  key={`dir-${dir.path}`}
+                  ref={(el) => { itemRefs.current[rowIndex] = el; }}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 cursor-pointer typography-ui-label rounded-lg",
+                    isSelected && "bg-interactive-selection"
+                  )}
+                  onClick={() => handleFileSelect(dir)}
+                  onMouseEnter={() => setSelectedIndex(rowIndex)}
+                >
+                  <RiFolder3Fill className="h-3.5 w-3.5 text-primary/60" />
+                  <span className="flex-1 min-w-0 truncate" aria-label={relativePath}>
+                    {displayPath}
+                  </span>
+                </div>
+              );
+            })}
+            {visibleDirectories.length > 0 && (visibleRecentFiles.length > 0 || visibleFiles.length > 0) && (
+              <div className="my-1 border-t border-border/60" />
+            )}
+            {visibleRecentFiles.map((file, index) => {
+              const rowIndex = visibleAgents.length + visibleDirectories.length + index;
               const relativePath = file.relativePath || file.name;
               const displayPath = truncatePathMiddle(relativePath, { maxLength: 60 });
               const isSelected = selectedIndex === rowIndex;
@@ -496,11 +605,11 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
                 </div>
               );
             })}
-            {recentFiles.length > 0 && files.length > 0 && (
+            {visibleRecentFiles.length > 0 && visibleFiles.length > 0 && (
               <div className="my-1 border-t border-border/60" />
             )}
-            {files.map((file, index) => {
-              const rowIndex = visibleAgents.length + recentFiles.length + index;
+            {visibleFiles.map((file, index) => {
+              const rowIndex = visibleAgents.length + visibleDirectories.length + visibleRecentFiles.length + index;
               const relativePath = file.relativePath || file.name;
               const displayPath = truncatePathMiddle(relativePath, { maxLength: 60 });
               const isSelected = selectedIndex === rowIndex;
@@ -553,7 +662,7 @@ export const FileMentionAutocomplete = React.forwardRef<FileMentionHandle, FileM
                 </React.Fragment>
               );
             })}
-            {files.length === 0 && recentFiles.length === 0 && visibleAgents.length === 0 && (
+            {visibleFiles.length === 0 && visibleDirectories.length === 0 && visibleRecentFiles.length === 0 && visibleAgents.length === 0 && (
               <div className="px-3 py-2 typography-ui-label text-muted-foreground">
                 No matches found
               </div>
