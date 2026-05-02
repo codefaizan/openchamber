@@ -24,7 +24,7 @@ import { setActionRefs } from "./session-actions"
 import { setSyncRefs } from "./sync-refs"
 import { stripMessageDiffSnapshots, stripSessionDiffSnapshots } from "./sanitize"
 import { syncDebug } from "./debug"
-import { getReconnectCandidateSessionIds } from "./reconnect-recovery"
+import { getReconnectCandidateSessionIds as getRecoverySessionIds } from "./reconnect-recovery"
 import { opencodeClient } from "@/lib/opencode/client"
 import { usePermissionStore } from "@/stores/permissionStore"
 import { useConfigStore } from "@/stores/useConfigStore"
@@ -307,7 +307,188 @@ function isRecentBoot() {
   return bootingRoot || Date.now() - bootedAt < BOOT_DEBOUNCE_MS
 }
 
-<function getReconnectCandidateSessionIds(state: State, opts: { directory: string; viewedSession: ReturnType<typeof getViewedSessionRecoveryTarget> }) {
+const hasEditMetadata = (permission: PermissionRequest): boolean => {
+  const metadata = permission.metadata
+  if (!metadata || typeof metadata !== "object") {
+    return false
+  }
+
+  const diff = metadata.diff
+  if (typeof diff === "string" && diff.trim().length > 0) {
+    return true
+  }
+
+  const patch = (metadata as { patch?: unknown }).patch
+  if (typeof patch === "string" && patch.trim().length > 0) {
+    return true
+  }
+
+  const files = Array.isArray((metadata as { files?: unknown }).files)
+    ? ((metadata as { files: unknown[] }).files)
+    : []
+
+  return files.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false
+    }
+    const file = entry as { patch?: unknown; diff?: unknown }
+    return (
+      (typeof file.patch === "string" && file.patch.trim().length > 0)
+      || (typeof file.diff === "string" && file.diff.trim().length > 0)
+    )
+  })
+}
+
+const shouldOpenDiffPreviewForEditPermission = (permission: PermissionRequest): boolean => {
+  if (!isVSCodeRuntime()) {
+    return false
+  }
+
+  if (permission.permission !== "edit") {
+    return false
+  }
+
+  if (!hasEditMetadata(permission)) {
+    return false
+  }
+
+  const mode = useConfigStore.getState().settingsVSCodeEditPreviewMode
+  return mode === "diff-editor"
+}
+
+const getNonEmptyString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue
+    }
+    const trimmed = value.trim()
+    if (trimmed.length > 0) {
+      return trimmed
+    }
+  }
+  return undefined
+}
+
+const toAbsolutePath = (directory: string, maybePath: string): string => {
+  if (/^(?:[a-zA-Z]:[\\/]|\/)/.test(maybePath)) {
+    const normalizedDirectory = directory.endsWith("/") ? directory.slice(0, -1) : directory
+    if (maybePath.startsWith(normalizedDirectory)) {
+      return maybePath
+    }
+    return maybePath
+  }
+  const normalizedDirectory = directory.endsWith("/") ? directory.slice(0, -1) : directory
+  return `${normalizedDirectory}/${maybePath}`
+}
+
+const toDiffLabel = (absolutePath: string, directory: string): string => {
+  const normalizedDirectory = directory.endsWith("/") ? directory.slice(0, -1) : directory
+  if (absolutePath.startsWith(`${normalizedDirectory}/`)) {
+    return `${absolutePath.slice(normalizedDirectory.length + 1)} (changes)`
+  }
+  return `${absolutePath} (changes)`
+}
+
+const extractFirstChangedLine = (patch: string): number | undefined => {
+  const match = patch.match(/@@\s*-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s*@@/)
+  if (!match || !match[1]) {
+    return undefined
+  }
+  const line = Number.parseInt(match[1], 10)
+  if (!Number.isFinite(line)) {
+    return undefined
+  }
+  return line
+}
+
+const extractPathFromPatch = (patch: string): string | undefined => {
+  const lines = patch.split('\n')
+  for (const line of lines) {
+    if (line.startsWith('Index: ')) {
+      const path = line.slice(7).trim()
+      if (path && path !== '/dev/null') {
+        return path
+      }
+    }
+    if (line.startsWith('--- ')) {
+      const path = line.slice(4).replace(/\.md\t.*$/, '.md').replace(/\t.*$/, '')
+      if (path && path !== '/dev/null') {
+        return path
+      }
+    }
+    if (line.startsWith('+++ ')) {
+      const path = line.slice(4).replace(/\.md\t.*$/, '.md').replace(/\t.*$/, '')
+      if (path && path !== '/dev/null') {
+        return path
+      }
+    }
+    if (line.startsWith('@@ ')) {
+      break
+    }
+  }
+  return undefined
+}
+
+const extractPatchText = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (trimmed.length > 0) {
+      return trimmed
+    }
+    return undefined
+  }
+
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  return getNonEmptyString(value.patch, value.diff)
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const openVSCodeDiffPreviewForPermission = (permission: PermissionRequest, directory: string): void => {
+  const runtimeAPIs = getRegisteredRuntimeAPIs()
+  if (runtimeAPIs?.runtime?.isVSCode !== true || !runtimeAPIs.editor) {
+    return
+  }
+
+  const metadata = permission.metadata
+  if (!metadata || typeof metadata !== "object") {
+    return
+  }
+
+  const patch = extractPatchText(metadata.patch ?? metadata.diff)
+  if (!patch) {
+    return
+  }
+
+  let relativePath = getNonEmptyString(
+    metadata.filePath,
+    metadata.file_path,
+    metadata.path,
+    metadata.filename,
+  )
+
+  if (!relativePath) {
+    relativePath = extractPathFromPatch(patch)
+  }
+
+  if (!relativePath) {
+    return
+  }
+
+  const absolutePath = toAbsolutePath(directory, relativePath)
+  const label = toDiffLabel(absolutePath, directory)
+  const line = extractFirstChangedLine(patch)
+
+  void runtimeAPIs.editor
+    .openDiffPreview(absolutePath, patch, label, { line })
+    .catch(() => undefined)
+}
+
+function getReconnectCandidateSessionIds(state: State, opts: { directory: string; viewedSession: ReturnType<typeof getViewedSessionRecoveryTarget> }) {
   const ids = new Set<string>()
 
   for (const [sessionId, status] of Object.entries(state.session_status ?? {})) {
